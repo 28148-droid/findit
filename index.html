@@ -47,7 +47,7 @@ button.sm{padding:6px 10px;font-size:14px}
 .empty{text-align:center;color:var(--mut);padding:24px}
 .note{font-size:13px;color:var(--mut);margin-top:8px}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:10px 18px;border-radius:99px;display:none;z-index:9}
-</style>
+.pic{width:100%;max-width:260px;border-radius:10px;margin:6px 0;display:block}button:disabled{opacity:.6;cursor:wait}</style>
 </head>
 <body>
 <header><h1>🔎 Findit</h1><p>แจ้งของหาย • แจ้งเจอของ • ช่วยกันตามหาเจ้าของ</p></header>
@@ -76,12 +76,14 @@ button.sm{padding:6px 10px;font-size:14px}
 <input id="place" maxlength="80" placeholder="เช่น โรงอาหาร, อาคาร 3 ห้อง 305, สนามบาส">
 <label for="desc">รายละเอียด / ตำหนิ</label>
 <textarea id="desc" maxlength="300" placeholder="สี ยี่ห้อ ลักษณะเด่น (ไม่ควรใส่ข้อมูลที่เจ้าของต้องยืนยัน เช่น เลขบัตร)"></textarea>
+<label for="img">รูปภาพ (ไม่บังคับ)</label>
+<input id="img" type="file" accept="image/*">
 <label for="who">ชื่อผู้แจ้ง *</label>
 <input id="who" maxlength="40" placeholder="ชื่อ / ชั้น เช่น คิมหันต์ ม.6/1">
 <label for="contact">ช่องทางติดต่อ *</label>
 <input id="contact" maxlength="60" placeholder="Line ID / เบอร์โทร / Instagram">
 <div style="margin-top:14px"><button type="button" class="pri" id="submit">ส่งประกาศ</button></div>
-<div class="note" id="mode"></div>
+<div class="note" id="mode">กำลังเชื่อมต่อ Google Sheets…</div>
 </div>
 </div>
 
@@ -99,84 +101,77 @@ button.sm{padding:6px 10px;font-size:14px}
 
 <script>
 (function(){
-var type='lost', items=[], store=null, LS='findit-items';
+var API='https://script.google.com/macros/s/AKfycbzC3VxqnDTIE-aIfo3QabLUaMUuXMvtJUXXuvGOzZBaz3_UeY6TSNw4qRLmClSRwIEv/exec';
+var type='lost',items=[],busy=false;
 var $=function(i){return document.getElementById(i)};
 function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
-function toast(m){var t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(toast.h);toast.h=setTimeout(function(){t.style.display='none'},2400)}
+function toast(m){var t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(toast.h);toast.h=setTimeout(function(){t.style.display='none'},3200)}
 function today(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
-function thDate(s){if(!s)return '';var p=s.split('-');var m=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];return +p[2]+' '+m[+p[1]-1]+' '+(+p[0]+543)}
+function thDate(s){if(!s)return '';var p=String(s).split('-');if(p.length<3)return s;var m=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];return +p[2]+' '+m[+p[1]-1]+' '+(+p[0]+543)}
 $('date').value=today();
-
-function setType(t){type=t;$('tLost').className=t==='lost'?'on':'';$('tFound').className=t==='found'?'on':'';
-$('lPlace').textContent=t==='lost'?'สถานที่ที่ทำหาย *':'สถานที่ที่เจอ / ฝากไว้ที่ *'}
+function setType(t){type=t;$('tLost').className=t==='lost'?'on':'';$('tFound').className=t==='found'?'on':'';$('lPlace').textContent=t==='lost'?'สถานที่ที่ทำหาย *':'สถานที่ที่เจอ / ฝากไว้ที่ *'}
 $('tLost').onclick=function(){setType('lost')};$('tFound').onclick=function(){setType('found')};
 
-function lsLoad(){try{return JSON.parse(localStorage.getItem(LS)||'[]')}catch(e){return []}}
-function lsSave(){try{localStorage.setItem(LS,JSON.stringify(items))}catch(e){}}
+function get(){return fetch(API+'?action=list').then(function(r){return r.json()})}
+function post(b){return fetch(API,{method:'POST',body:JSON.stringify(b)}).then(function(r){return r.json()})}
+function load(){
+ return get().then(function(d){
+  if(!d.ok)throw new Error(d.error||'โหลดไม่สำเร็จ');
+  items=d.items;$('mode').textContent='เชื่อมต่อ Google Sheets แล้ว ✔';render();
+ }).catch(function(e){$('mode').textContent='เชื่อมต่อไม่ได้: '+e.message+' (ตรวจว่า Deploy เป็น Anyone และเลือก New version แล้ว)'});
+}
 
 function render(){
- var q=$('q').value.trim().toLowerCase(),ft=$('ft').value,fs=$('fs').value;
- var L=0,F=0,D=0;items.forEach(function(x){if(x.done)D++;else if(x.type==='lost')L++;else F++});
+ var q=$('q').value.trim().toLowerCase(),ft=$('ft').value,fs=$('fs').value,L=0,F=0,D=0;
+ items.forEach(function(x){if(x.done)D++;else if(x.type==='lost')L++;else F++});
  $('sL').textContent=L;$('sF').textContent=F;$('sD').textContent=D;
  var rows=items.filter(function(x){
-  if(ft&&x.type!==ft)return false;
-  if(fs==='open'&&x.done)return false;
-  if(fs==='done'&&!x.done)return false;
-  if(q&&(x.name+' '+x.place+' '+x.desc+' '+x.cat).toLowerCase().indexOf(q)<0)return false;
-  return true}).sort(function(a,b){return (b.created||0)-(a.created||0)});
+  if(ft&&x.type!==ft)return false;if(fs==='open'&&x.done)return false;if(fs==='done'&&!x.done)return false;
+  if(q&&(x.name+' '+x.place+' '+x.desc+' '+x.cat).toLowerCase().indexOf(q)<0)return false;return true});
  if(!rows.length){$('list').innerHTML='<div class="empty">ยังไม่มีรายการ</div>';return}
  $('list').innerHTML=rows.map(function(x){
   var tag=x.type==='lost'?'<span class="tag lost">ของหาย</span>':'<span class="tag found">เจอของ</span>';
   if(x.done)tag+='<span class="tag done">✔ ได้คืนแล้ว</span>';
-  return '<div class="item'+(x.done?' done':'')+'"><div class="top"><div>'+tag+'<h3>'+esc(x.name)+'</h3></div></div>'+
+  return '<div class="item'+(x.done?' done':'')+'">'+tag+'<h3>'+esc(x.name)+'</h3>'+
+  (x.image?'<img class="pic" loading="lazy" src="'+esc(x.image)+'" alt="">':'')+
   '<div class="meta">📍 '+esc(x.place)+' • 📅 '+thDate(x.date)+' • 🏷️ '+esc(x.cat)+'</div>'+
   (x.desc?'<div>'+esc(x.desc)+'</div>':'')+
   '<div class="meta">แจ้งโดย '+esc(x.who)+' • ติดต่อ: <span class="contact">'+esc(x.contact)+'</span></div>'+
   '<div class="acts">'+(x.done?'':'<button class="sm" data-a="done" data-id="'+esc(x.id)+'">✔ '+(x.type==='lost'?'เจอแล้ว':'คืนเจ้าของแล้ว')+'</button>')+
-  '<button class="sm" data-a="del" data-id="'+esc(x.id)+'">🗑️ ลบ</button></div></div>'}).join('')
+  '<button class="sm" data-a="delete" data-id="'+esc(x.id)+'">🗑️ ลบ</button></div></div>'}).join('')
 }
 ['q','ft','fs'].forEach(function(i){$(i).oninput=render;$(i).onchange=render});
 
 $('list').onclick=function(e){
- var b=e.target.closest('button');if(!b)return;var id=b.getAttribute('data-id'),a=b.getAttribute('data-a');
- if(a==='del'&&!confirm('ลบรายการนี้?'))return;
- if(store){
-  var ref=store.collection('items').doc(id);
-  (a==='done'?ref.update({done:true}):ref.delete()).catch(function(){toast('ไม่มีสิทธิ์แก้ไขรายการนี้')});
- }else{
-  if(a==='done')items.forEach(function(x){if(x.id===id)x.done=true});
-  else items=items.filter(function(x){return x.id!==id});
-  lsSave();render();
- }
+ var b=e.target.closest('button');if(!b||busy)return;var a=b.getAttribute('data-a'),id=b.getAttribute('data-id'),pin;
+ if(a==='delete'&&!confirm('ลบรายการนี้?'))return;
+ function go(){busy=true;post({action:a,id:id,pin:pin}).then(function(d){
+   if(!d.ok){if(/รหัส/.test(d.error||'')){pin=prompt('ใส่รหัสแอดมิน');if(pin){busy=false;return go()}}throw new Error(d.error||'ไม่สำเร็จ')}
+   return load()}).catch(function(e){toast('ผิดพลาด: '+e.message)}).then(function(){busy=false})}
+ go();
 };
+
+function resize(file){return new Promise(function(res,rej){
+ var r=new FileReader();r.onerror=rej;r.onload=function(){var im=new Image();im.onerror=rej;im.onload=function(){
+  var m=800,w=im.width,h=im.height,k=Math.min(1,m/Math.max(w,h));
+  var c=document.createElement('canvas');c.width=Math.round(w*k);c.height=Math.round(h*k);
+  c.getContext('2d').drawImage(im,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',0.7))};im.src=r.result};r.readAsDataURL(file)})}
 
 $('submit').onclick=function(){
+ if(busy)return;
  var o={type:type,name:$('name').value.trim(),cat:$('cat').value,date:$('date').value,place:$('place').value.trim(),
-  desc:$('desc').value.trim(),who:$('who').value.trim(),contact:$('contact').value.trim(),done:false,created:Date.now()};
+  desc:$('desc').value.trim(),who:$('who').value.trim(),contact:$('contact').value.trim()};
  if(!o.name||!o.place||!o.who||!o.contact){toast('กรอกช่องที่มี * ให้ครบก่อนนะ');return}
- function ok(){['name','place','desc'].forEach(function(i){$(i).value=''});toast('ส่งประกาศเรียบร้อย ✔');setType(type)}
- if(store){
-  store.collection('items').add(o).then(ok).catch(function(){toast('บันทึกไม่ได้ (ไม่มีสิทธิ์เขียน) ลองใหม่อีกครั้ง')});
- }else{
-  o.id='l'+o.created;items.push(o);lsSave();render();ok();
- }
+ busy=true;var btn=$('submit');btn.disabled=true;btn.textContent='กำลังบันทึก…';
+ var f=$('img').files[0];
+ (f?resize(f).then(function(d){o.imageBase64=d}):Promise.resolve())
+ .then(function(){return post({action:'add',item:o})})
+ .then(function(d){if(!d.ok)throw new Error(d.error||'บันทึกไม่สำเร็จ');
+   ['name','place','desc'].forEach(function(i){$(i).value=''});$('img').value='';toast('บันทึกลง Google Sheets แล้ว ✔');return load()})
+ .catch(function(e){toast('ผิดพลาด: '+e.message)})
+ .then(function(){busy=false;btn.disabled=false;btn.textContent='ส่งประกาศ'});
 };
-
-function startLocal(){items=lsLoad();$('mode').textContent='โหมดออฟไลน์: ข้อมูลเก็บในเครื่องนี้เท่านั้น';render()}
-startLocal();
-
-// ใช้ฐานข้อมูลร่วมกัน (ทุกคนที่เปิดลิงก์เห็นรายการเดียวกัน) ถ้ามีสิทธิ์
-try{
- if(window.claude&&claude.use){
-  claude.use('db').then(function(db){
-   if(!db)return;
-   store=db;$('mode').textContent='เชื่อมต่อฐานข้อมูลร่วมกันแล้ว: ทุกคนเห็นประกาศเดียวกันแบบเรียลไทม์';
-   db.collection('items').onSnapshot(function(snap){
-    items=snap.docs.map(function(d){var x=d.data();x.id=d.id;return x});render()
-   },function(){store=null;startLocal()});
-  }).catch(function(){})
- }
-}catch(e){}
+load();
 })();
 </script>
 </body>
